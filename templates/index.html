@@ -1,0 +1,133 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title> 💎 Diamond Chatbot</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Rubik+Dirt&display=swap" rel="stylesheet">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            width: 97%;
+            height: 600px;
+            background-color: rgb(0, 0, 0);
+            justify-content: center; /* Centers horizontally */
+            align-items: center; /* Centers vertically */ 
+        }
+        h1 {
+            text-align: left;
+            color: white;
+            font-size: 2.5em;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            background-color: #000000;
+            padding: 15px;
+            border-radius: 10px;
+            width: 95%;
+            margin-bottom: 20px;
+            box-shadow: 2px 4px 10px #000000;
+            font-family: "Rubik Dirt", serif; /* Apply the new font */
+        }
+        #chat-box {
+            width: 95%;
+            height: 350px;
+            border: 1px solid #ccc;
+            overflow-y: scroll;
+            padding: 1em;
+            margin-bottom: 1em;
+            background-color: rgb(184, 195, 201); /* Slight off-white for the chat area */
+            display: flex;             /* Make it a flex container */
+            flex-direction: column;    /* Stack messages vertically */
+            align-items: center; /* Centers vertically */
+        }
+        .user-bubble {
+            background-color:rgb(33, 79, 129);  /* Light teal background */
+            margin: 5px;
+            padding: 10px;
+            border-radius: 10px;
+            max-width: 60%;
+            align-self: flex-end;       /* Push user bubbles to the right */
+        }
+        .bot-bubble {
+            background-color:rgb(52, 115, 163);  /* Light green background */
+            margin: 5px;
+            padding: 10px;
+            border-radius: 10px;
+            max-width: 60%;
+            align-self: flex-start;     /* Push bot bubbles to the left */
+        }
+        #user-query {
+            width: 90%;
+            height: 50px;
+            padding: 0.5em;
+        }
+        #send-btn {
+            padding: 0.5em 1em;
+            height: 68px;
+            width: 6%;
+            background-color: rgb(53, 60, 78);
+            color: white;
+            border: none;
+            border-radius: 5px;
+            font-size: 1em;
+            cursor: pointer;
+            transition: background-color 0.3s;
+        }
+        #send-btn:hover {
+            background-color: rgb(1, 22, 49);
+        }
+    </style>
+</head>
+<body>
+    <h1> 💎 Diamond Chatbot</h1>
+    <div id="chat-box"></div>
+    <form id="chat-form">
+        <input type="text" id="user-query" name="user_query" placeholder="Enter your query..." required>
+        <button type="submit" id="send-btn">Send</button>
+    </form>
+
+    <script>
+        const form = document.getElementById('chat-form');
+        const chatBox = document.getElementById('chat-box');
+
+        form.addEventListener('submit', function(e) {
+            e.preventDefault();
+            const userQuery = document.getElementById('user-query').value;
+
+            // Create a "user bubble" for the user's query
+            const userBubble = document.createElement('div');
+            userBubble.classList.add('user-bubble');
+            userBubble.innerHTML = `<strong>You:</strong> ${userQuery}`;
+            chatBox.appendChild(userBubble);
+
+            // Send the query to the Flask backend
+            fetch('/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/x-www-form-urlencoded'
+                },
+                body: 'user_query=' + encodeURIComponent(userQuery)
+            })
+            .then(response => response.text())
+            .then(data => {
+                // Create a "bot bubble" for the bot's response
+                const botBubble = document.createElement('div');
+                botBubble.classList.add('bot-bubble');
+                // Replace newlines with <br> for display
+                botBubble.innerHTML = `<strong>Shopping Assistant:</strong><br>${data.replace(/\n/g, '<br>')}`;
+                chatBox.appendChild(botBubble);
+
+                // Scroll to the bottom of the chat box
+                chatBox.scrollTop = chatBox.scrollHeight;
+            })
+            .catch(error => {
+                console.error('Error:', error);
+            });
+
+            // Clear the input field
+            document.getElementById('user-query').value = '';
+        });
+    </script>
+</body>
+</html>
