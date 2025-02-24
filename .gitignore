@@ -1,0 +1,7 @@
+/.venv/
+/.env/
+__pycache__/
+diamond_embeddings.npy
+diamond_faiss_index.faiss
+/sentence_transformer_model/
+sentence_transformer_model/model.safetensors
