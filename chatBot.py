@@ -6,6 +6,7 @@ import re
 import os
 from groq import Groq
 from dotenv import load_dotenv
+
 # Global: Path for embeddings (used in temporary index building)
 EMBEDDING_FILE_PATH = 'diamond_embeddings.npy'
 
@@ -95,23 +96,26 @@ def extract_constraints_from_query(user_query):
     if clarity_match:
         constraints["Clarity"] = clarity_match.group(1).lower()
 
-    # Extract Cut (e.g., "excellent", "ideal", "very good", "good")
-    cut_match = re.search(r'\b(excellent|ideal|very good|good)\b', user_query, re.IGNORECASE)
+    # Extract Cut: match either "cut is excellent" or "excellent cut"
+    cut_match = re.search(r'(?:cut\s*(?:is\s*)?(excellent|ideal|very good|good))|(?:(excellent|ideal|very good|good)\s*cut)', user_query, re.IGNORECASE)
     if cut_match:
-        constraints["Cut"] = cut_match.group(1).lower()
+        quality = cut_match.group(1) if cut_match.group(1) is not None else cut_match.group(2)
+        constraints["Cut"] = quality.lower()
 
-    # Extract Symmetry (e.g., "excellent", "very good", "good")
-    symmetry_match = re.search(r'\b(excellent|very good|good)\b', user_query, re.IGNORECASE)
-    if symmetry_match:
-        constraints["Symmetry"] = symmetry_match.group(1).lower()
-
-    # Extract Polish (e.g., "excellent", "ideal", "very good", "good")
-    polish_match = re.search(r'\b(excellent|ideal|very good|good)\b', user_query, re.IGNORECASE)
+    # Extract Polish: match either "polish is very good" or "very good polish"
+    polish_match = re.search(r'(?:polish\s*(?:is\s*)?(excellent|ideal|very good|good))|(?:(excellent|ideal|very good|good)\s*polish)', user_query, re.IGNORECASE)
     if polish_match:
-        constraints["Polish"] = polish_match.group(1).lower()
+        quality = polish_match.group(1) if polish_match.group(1) is not None else polish_match.group(2)
+        constraints["Polish"] = quality.lower()
+
+    # Extract Symmetry: match either "symmetry is good" or "good symmetry"
+    symmetry_match = re.search(r'(?:symmetry\s*(?:is\s*)?(excellent|ideal|very good|good))|(?:(excellent|ideal|very good|good)\s*symmetry)', user_query, re.IGNORECASE)
+    if symmetry_match:
+        quality = symmetry_match.group(1) if symmetry_match.group(1) is not None else symmetry_match.group(2)
+        constraints["Symmetry"] = quality.lower()
 
     # Extract Style (e.g., "labgrown" or "natural") – normalized to lowercase
-    style_match = re.search(r'\b(labgrown|natural)\b', user_query, re.IGNORECASE)
+    style_match = re.search(r'\b(lab grown|natural)\b', user_query, re.IGNORECASE)
     if style_match:
         constraints["Style"] = style_match.group(1).lower()
 
@@ -144,6 +148,20 @@ def hybrid_search(user_query, df, faiss_index, model, top_k=200):
         if df.empty:
             print("No diamonds found for the specified style.")
             return pd.DataFrame()
+        
+    if "Shape" in constraints:
+        # Use contains() to allow for partial matches (e.g., "princess" matching "princess cut")
+        df = df[df["Shape"].str.lower().str.contains(constraints["Shape"].lower())]
+        if df.empty:
+            print(f"No {constraints['Shape']} diamonds found.")
+            return pd.DataFrame()
+        
+    #Filter by Clarity if specified
+    if "Clarity" in constraints:
+        df = df[df["Clarity"].str.lower().str.contains(constraints["Clarity"].lower())]
+        if df.empty:
+            print(f"No diamonds found with clarity {constraints['Clarity']}.")
+            return pd.DataFrame()
 
     # If Budget is specified, filter diamonds above that budget
     if "Budget" in constraints:
@@ -152,48 +170,51 @@ def hybrid_search(user_query, df, faiss_index, model, top_k=200):
         if df.empty:
             print(f"No diamonds found under price {user_budget}.")
             return pd.DataFrame()
+        
+    # Strict filtering for quality attributes if 2 or more are specified
+    quality_attrs = ["Cut", "Polish", "Symmetry"]
+    specified_quality = [attr for attr in quality_attrs if attr in constraints]
+    if len(specified_quality) >= 2:
+        for attr in specified_quality:
+            df = df[df[attr].str.lower() == constraints[attr].lower()]
+        if df.empty:
+            print(f"No diamonds found that exactly match the specified {', '.join(specified_quality)} criteria.")
+            return pd.DataFrame()
 
-    # Pre-filter by Carat if specified
-    if "Carat" in constraints:
-        # Set initial tolerance: 0.01 for labgrown, 0.05 for natural diamonds
-        tolerance = 0.01 if constraints.get("Style", "").lower() == "labgrown" else 0.05
-        df_carat = df[
-            (df['Carat'] >= constraints["Carat"] - tolerance) &
-            (df['Carat'] <= constraints["Carat"] + tolerance)
-        ]
-        
-        # If no results found, relax the tolerance (e.g., double it) to show close matches
-        if df_carat.empty:
-            #print(f"No exact carat matches found with tolerance {tolerance}. Relaxing tolerance...")
-            relaxed_tolerance = tolerance * 2  # You can adjust this factor as needed
-            df_carat = df[
-                (df['Carat'] >= constraints["Carat"] - relaxed_tolerance) &
-                (df['Carat'] <= constraints["Carat"] + relaxed_tolerance)
-            ]
-        
-        # If df_carat now has results, build a temporary FAISS index on these diamonds
-        if not df_carat.empty:
-            subset_indices = df_carat.index.tolist()
-            all_embeddings = np.load(EMBEDDING_FILE_PATH)
-            subset_embeddings = all_embeddings[subset_indices]
-            temp_index = faiss.IndexFlatL2(all_embeddings.shape[1])
-            temp_index.add(subset_embeddings)
-            new_top_k = min(top_k, len(df_carat))
-            query_embedding = model.encode(user_query, convert_to_numpy=True)
-            D, I = temp_index.search(np.array([query_embedding]), new_top_k)
-            valid_indices = [i for i in I[0] if 0 <= i < len(df_carat)]
-            valid_D = D[0][:len(valid_indices)]
-            results_df = df_carat.iloc[valid_indices].copy()
-            results_df['distance'] = valid_D
+    if "Carat" not in constraints:
+        if any(word in user_query.lower() for word in ["minimum", "lowest", "smallest"]):
+            # Sort by Carat in ascending order to return the smallest (minimum) carat diamonds
+            results_df = df.sort_values(by="Carat", ascending=True)
         else:
-            # If still no matches, fall back to the full dataset
-            query_embedding = model.encode(user_query, convert_to_numpy=True)
-            new_top_k = min(top_k, df.shape[0])
-            D, I = faiss_index.search(np.array([query_embedding]), new_top_k)
-            valid_indices = [i for i in I[0] if 0 <= i < df.shape[0]]
-            valid_D = D[0][:len(valid_indices)]
-            results_df = df.iloc[valid_indices].copy()
-            results_df['distance'] = valid_D
+            # Otherwise, default to sorting by Price descending
+            results_df = df.sort_values(by="Price", ascending=False)
+        return results_df.head(5).reset_index(drop=True)
+
+    # Set initial tolerance: 0.01 for labgrown, 0.05 for natural diamonds
+    tolerance = 0.01 if constraints.get("Style", "").lower() == "labgrown" else 0.05
+    df_carat = df[
+        (df['Carat'] >= constraints["Carat"] - tolerance) &
+        (df['Carat'] <= constraints["Carat"] + tolerance)
+    ]
+    if df_carat.empty:
+        relaxed_tolerance = tolerance * 2
+        df_carat = df[
+            (df['Carat'] >= constraints["Carat"] - relaxed_tolerance) &
+            (df['Carat'] <= constraints["Carat"] + relaxed_tolerance)
+        ]
+    if not df_carat.empty:
+        subset_indices = df_carat.index.tolist()
+        all_embeddings = np.load(EMBEDDING_FILE_PATH)
+        subset_embeddings = all_embeddings[subset_indices]
+        temp_index = faiss.IndexFlatL2(all_embeddings.shape[1])
+        temp_index.add(subset_embeddings)
+        new_top_k = min(top_k, len(df_carat))
+        query_embedding = model.encode(user_query, convert_to_numpy=True)
+        D, I = temp_index.search(np.array([query_embedding]), new_top_k)
+        valid_indices = [i for i in I[0] if 0 <= i < len(df_carat)]
+        valid_D = D[0][:len(valid_indices)]
+        results_df = df_carat.iloc[valid_indices].copy()
+        results_df['distance'] = valid_D
     else:
         query_embedding = model.encode(user_query, convert_to_numpy=True)
         new_top_k = min(top_k, df.shape[0])
@@ -203,41 +224,51 @@ def hybrid_search(user_query, df, faiss_index, model, top_k=200):
         results_df = df.iloc[valid_indices].copy()
         results_df['distance'] = valid_D
 
-    # Composite ranking: compute a composite score for each candidate.
-    def compute_score(row):
-        score = row['distance']
-        if "Carat" in constraints:
-            score += 1000 * abs(row["Carat"] - constraints["Carat"])  # Increased weight to 1000
-        # If the user gave a Budget, penalize diamonds that are far below that budget
-        # so that higher-priced diamonds (closer to the budget) rank better.
-        if "Budget" in constraints:
-            user_budget = constraints["Budget"]
-            # E.g. penalize the absolute difference from the budget
-            # The smaller the difference, the lower the penalty => higher rank
-            score += 0.05 * abs(row["Price"] - user_budget)
-        else:
-            # If no budget specified, revert to your old logic that penalizes higher price
-            try:
-                price = float(row["Price"])
-            except:
-                price = 0
-            score += 0.1 * price
+    # Additional sorting if query mentions "highest", "largest", or "maximum"
+    if any(word in user_query.lower() for word in ["highest", "largest", "maximum"]):
+        results_df = results_df.sort_values(by='Carat', ascending=False)
+        return results_df.head(5).reset_index(drop=True)
+    # NEW: If query mentions "minimum", "lowest", or "smallest", sort by Carat ascending
+    elif any(word in user_query.lower() for word in ["minimum", "lowest", "smallest"]):
+        results_df = results_df.sort_values(by='Carat', ascending=True)
+        return results_df.head(5).reset_index(drop=True)
+    else:
+        # Otherwise, use composite ranking (if not using strict filtering)
+        def compute_score(row, constraints, df_filtered):
+            score = row['distance']
+            
+            # Only add a direct carat penalty if user specifies Carat;
+            # Otherwise, anchor against the median carat to avoid outlier bias.
+            if "Carat" in constraints:
+                score += 1000 * abs(row["Carat"] - constraints["Carat"])
+            else:
+                median_carat = df_filtered['Carat'].median()
+                score += 100 * abs(row["Carat"] - median_carat)
+            
+            # Price penalty: favor diamonds whose price is close to the user's budget (if provided)
+            if "Budget" in constraints:
+                user_budget = constraints["Budget"]
+                score += 0.05 * abs(row["Price"] - user_budget)
+            else:
+                try:
+                    price = float(row["Price"])
+                except:
+                    price = 0
+                score += 0.1 * price
 
-        # Penalties for mismatch in Clarity and Color
-        for attr, penalty in [("Clarity", 50), ("Color", 50)]:
-            if attr in constraints and row[attr] != constraints[attr]:
-                score += penalty
+            # Penalties for mismatch in quality attributes
+            for attr, penalty in [("Clarity", 50), ("Color", 50)]:
+                if attr in constraints and row[attr].lower() != constraints[attr].lower():
+                    score += penalty
+            for attr, penalty in [("Cut", 20), ("Symmetry", 20), ("Polish", 20)]:
+                if attr in constraints and row[attr].lower() != constraints[attr].lower():
+                    score += penalty
+            
+            return score
 
-        # Penalties for mismatch in Cut, Symmetry, Polish
-        for attr, penalty in [("Cut", 20), ("Symmetry", 20), ("Polish", 20)]:
-            if attr in constraints and row[attr] != constraints[attr]:
-                score += penalty
-
-        return score
-
-    results_df['score'] = results_df.apply(compute_score, axis=1)
-    results_df = results_df.sort_values(by='score', ascending=True)
-    return results_df.head(5).reset_index(drop=True)
+        results_df['score'] = results_df.apply(lambda row: compute_score(row, constraints, df), axis=1)
+        results_df = results_df.sort_values(by='score', ascending=True)
+        return results_df.head(5).reset_index(drop=True)
 
 # ------------------- Groq Integration -------------------
 def generate_groq_response(user_query, relevant_data, client):
@@ -318,13 +349,9 @@ def diamond_chatbot(user_query, df, faiss_index, model, client):
     
 # ------------------- Main Execution -------------------
 def main():
-    
-    # Load once outside the loop
-    #df, index, model, client = setup_chatbot()
     load_dotenv()
-    GROQ_API_KEY = os.getenv("GROQ_API_KEY")  # Update with your key
+    GROQ_API_KEY = os.getenv("GROQ_API_KEY")
     client = Groq()
-
     embedding_file = 'diamond_embeddings.npy'
     faiss_index_file = 'diamond_faiss_index.faiss'
     dataframe_file = 'diamond_dataframe.csv'
@@ -338,28 +365,24 @@ def main():
         print("Error loading existing data:", e)
         print("Running first-time data load and creating index...")
         df, embeddings, index, model = data_and_embedding(file_path, embedding_file, faiss_index_file, dataframe_file, model_path)
-
     # Conversation loop: Continue until user types "exit" or "quit"
     while True:
         user_query = input("Hi! How can I help you? : ")
         if user_query.lower() in ["exit", "quit"]:
             print("Thank you for visiting! Have a wonderful day.")
             break
-
         # If user said "hi" or "hello", let's just pass it directly to diamond_chatbot()
         # The fallback inside diamond_chatbot() will handle it.
         if user_query.strip().lower() in ["hi", "hello"]:
             diamond_chatbot(user_query, df, index, model, client)
             print("\n---\n")
             continue
-
         constraints = extract_constraints_from_query(user_query)
         if "Style" not in constraints:
             style_input = input("Please specify the style (LabGrown or Natural): ")
             user_query += " " + style_input
-
         diamond_chatbot(user_query, df, index, model, client)
         print("\n---\n")
     
-if __name__ == "__main__":
+if _name_ == "__main__":
     main()
