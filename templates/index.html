@@ -1,370 +1,89 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Diamond Search Assistant</title>
-    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">
-    <style>
-        * {
-            margin: 0;
-            padding: 0;
-            box-sizing: border-box;
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-        }
-        body {
-            background: linear-gradient(135deg, #f5f7fa 0%, #c3cfe2 100%);
-            min-height: 100vh;
-            padding: 20px;
-        }
-        .container {
-            max-width: 1200px;
-            margin: 0 auto;
-            background: white;
-            border-radius: 20px;
-            box-shadow: 0 10px 20px rgba(0,0,0,0.1);
-            overflow: hidden;
-        }
-        .header {
-            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-            color: white;
-            padding: 20px;
-            text-align: center;
-            position: relative;
-        }
-        .header-avatar {
-            width: 80px;
-            height: 80px;
-            background: white;
-            border-radius: 50%;
-            margin: 0 auto 15px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            box-shadow: 0 4px 8px rgba(0,0,0,0.1);
-        }
-        .header-avatar i {
-            font-size: 40px;
-            color: #667eea;
-        }
-        .chat-container {
-            height: 500px;
-            display: flex;
-            flex-direction: column;
-        }
-        .chat-messages {
-            flex-grow: 1;
-            overflow-y: auto;
-            padding: 20px;
-            background: #f8f9fa;
-        }
-        .message {
-            margin-bottom: 20px;
-            opacity: 0;
-            transform: translateY(20px);
-            animation: fadeIn 0.3s forwards;
-            display: flex;
-            align-items: flex-start;
-            gap: 10px;
-        }
-        .user-message {
-            flex-direction: row-reverse;
-        }
-        .avatar {
-            width: 40px;
-            height: 40px;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            flex-shrink: 0;
-        }
-        .bot-avatar {
-            background: #667eea;
-            color: white;
-        }
-        .user-avatar {
-            background: #764ba2;
-            color: white;
-        }
-        .avatar i {
-            font-size: 20px;
-        }
-        @keyframes fadeIn {
-            to {
-                opacity: 1;
-                transform: translateY(0);
-            }
-        }
-        .message-bubble {
-            display: flex;
-            flex-direction: column;
-        }
-        .message-content {
-            display: inline-block;
-            padding: 12px 18px;
-            border-radius: 20px;
-            max-width: 80%;
-            margin-top: 5px;
-            white-space: pre-wrap;
-        }
-        .user-message .message-content {
-            background: #667eea;
-            color: white;
-            border-bottom-right-radius: 5px;
-        }
-        .bot-message .message-content {
-            background: white;
-            color: #333;
-            border-bottom-left-radius: 5px;
-            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
-        }
-        .message-time {
-            font-size: 0.8em;
-            color: #666;
-            margin-top: 5px;
-            margin-left: 10px;
-        }
-        .user-message .message-time {
-            text-align: right;
-            margin-right: 10px;
-        }
-        .input-container {
-            display: flex;
-            padding: 20px;
-            background: white;
-            border-top: 1px solid #eee;
-            gap: 10px;
-            align-items: center;
-        }
-        .input-container input {
-            flex-grow: 1;
-            padding: 12px 20px;
-            border: 2px solid #eee;
-            border-radius: 25px;
-            font-size: 16px;
-            transition: border-color 0.3s;
-        }
-        .input-container input:focus {
-            outline: none;
-            border-color: #667eea;
-        }
-        .send-button {
-            background: #667eea;
-            color: white;
-            border: none;
-            width: 50px;
-            height: 50px;
-            border-radius: 50%;
-            cursor: pointer;
-            font-size: 20px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            transition: transform 0.2s, background 0.3s;
-        }
-        .send-button:hover {
-            background: #764ba2;
-            transform: scale(1.05);
-        }
-        .style-selection {
-            display: none;
-            position: fixed;
-            top: 50%;
-            left: 50%;
-            transform: translate(-50%, -50%);
-            background: white;
-            padding: 30px;
-            border-radius: 15px;
-            box-shadow: 0 5px 25px rgba(0,0,0,0.2);
-            z-index: 1000;
-            text-align: center;
-        }
-        .style-selection h3 {
-            margin-bottom: 20px;
-            color: #333;
-        }
-        .style-buttons {
-            display: flex;
-            gap: 15px;
-            justify-content: center;
-        }
-        .style-button {
-            padding: 15px 30px;
-            border: none;
-            border-radius: 10px;
-            cursor: pointer;
-            transition: transform 0.2s, background 0.3s;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            font-size: 16px;
-        }
-        .style-button i {
-            font-size: 20px;
-        }
-        .style-button.natural {
-            background: #4CAF50;
-            color: white;
-        }
-        .style-button.labgrown {
-            background: #2196F3;
-            color: white;
-        }
-        .style-button:hover {
-            transform: scale(1.05);
-        }
-        @media (max-width: 768px) {
-            .container {
-                margin: 0;
-                border-radius: 0;
-            }
-            .chat-container {
-                height: calc(100vh - 180px);
-            }
-            .message-content {
-                max-width: 90%;
-            }
-            .header-avatar {
-                width: 60px;
-                height: 60px;
-            }
-            .header-avatar i {
-                font-size: 30px;
-            }
-        }
-    </style>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Gemma - Your Diamond Guide</title>
+  <!-- FontAwesome for icons -->
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" />
+  <!-- Link to your CSS -->
+  <link rel="stylesheet" href="../static/style.css" />
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <div class="header-avatar">
-                <i class="fas fa-gem"></i>
-            </div>
-            <h1>Diamond Search Assistant</h1>
-            <p>Find your perfect diamond</p>
-        </div>
-        <div class="chat-container">
-            <div class="chat-messages" id="chatMessages">
-                <!-- Initial welcome message -->
-                <div class="message bot-message">
-                    <div class="avatar bot-avatar">
-                        <i class="fas fa-gem"></i>
-                    </div>
-                    <div class="message-bubble">
-                        <div class="message-content">Hello! I'm your diamond assistant. How can I help you find the perfect diamond today?
-                        </div>
-                        <div class="message-time">Just now</div>
-                    </div>
-                </div>
-            </div>
-            <div class="input-container">
-                <input type="text" id="userInput" placeholder="Type your message here..." />
-                <button class="send-button" onclick="sendMessage()">
-                    <i class="fas fa-paper-plane"></i>
-                </button>
-            </div>
-        </div>
-    </div>
-    <div class="style-selection" id="styleSelection">
-        <h3>Please select diamond style:</h3>
-        <div class="style-buttons">
-            <button class="style-button natural" onclick="selectStyle('Natural')">
-                <i class="fas fa-gem"></i>
-                Natural
-            </button>
-            <button class="style-button labgrown" onclick="selectStyle('LabGrown')">
-                <i class="fas fa-flask"></i>
-                Lab Grown
-            </button>
-        </div>
+  <div class="container">
+    <!-- Top Header -->
+    <div class="header">
+      <div class="header-avatar">
+        <i class="fas fa-dice-d20"></i>
+      </div>
+      <h1>Gemma - Your Diamond Guide</h1>
+      <p class="subheading">Find your perfect diamond</p>
     </div>
 
-    <script>
-        let currentQuery = '';
+    <!-- Chat Container -->
+    <div class="chat-container">
+      <!-- Chat messages area -->
+      <div class="chat-messages" id="chatMessages">
+        <!-- Initial bot message -->
+        <div class="message bot-message">
+          <div class="avatar bot-avatar">
+            <i class="fas fa-gem"></i>
+          </div>
+          <div class="bubble bot-bubble">
+            <strong>Gemma</strong>: Hello! I'm Gemma, your diamond guru. How can I help you find the perfect diamond today?
+          </div>
+        </div>
+      </div>
 
-        function addMessage(message, isUser = false) {
-            const chatMessages = document.getElementById('chatMessages');
-            const messageDiv = document.createElement('div');
-            messageDiv.className = `message ${isUser ? 'user-message' : 'bot-message'}`;
-            
-            const avatar = document.createElement('div');
-            avatar.className = `avatar ${isUser ? 'user-avatar' : 'bot-avatar'}`;
-            avatar.innerHTML = `<i class="fas ${isUser ? 'fa-user' : 'fa-gem'}"></i>`;
-            
-            const messageBubble = document.createElement('div');
-            messageBubble.className = 'message-bubble';
-            
-            const content = document.createElement('div');
-            content.className = 'message-content';
-            content.textContent = message;
-            
-            const time = document.createElement('div');
-            time.className = 'message-time';
-            time.textContent = 'Just now';
-            
-            messageBubble.appendChild(content);
-            messageBubble.appendChild(time)
-;
-            
-            if (isUser) {
-                messageDiv.appendChild(messageBubble);
-                messageDiv.appendChild(avatar);
-            } else {
-                messageDiv.appendChild(avatar);
-                messageDiv.appendChild(messageBubble);
-            }
-            
-            chatMessages.appendChild(messageDiv);
-            chatMessages.scrollTop = chatMessages.scrollHeight;
-        }
+      <!-- Input container -->
+      <div class="input-container">
+        <input
+          type="text"
+          id="userInput"
+          placeholder="Ask about diamonds (e.g., 'Show me 1 carat round diamonds')"
+        />
+        <button class="send-button" id="sendButton">
+          <i class="fas fa-paper-plane"></i>
+        </button>
+      </div>
+    </div>
 
-        async function sendMessage() {
-            const input = document.getElementById('userInput');
-            const message = input.value.trim();
-            
-            if (message) {
-                addMessage(message, true);
-                input.value = '';
-                currentQuery = message;
-                
-                if (!message.toLowerCase().includes('natural') && !message.toLowerCase().includes('labgrown')) {
-                    document.getElementById('styleSelection').style.display = 'block';
-                } else {
-                    await sendToBackend(message);
-                }
-            }
-        }
+    <!-- Search Results Bar -->
+    <div id="search-results-bar" class="search-results-bar"></div>
 
-        async function selectStyle(style) {
-            document.getElementById('styleSelection').style.display = 'none';
-            const fullQuery = `${currentQuery} ${style}`;
-            await sendToBackend(fullQuery);
-        }
+    <!-- Diamond results (expert analysis + cards) -->
+    <div id="dynamic-results"></div>
+  </div>
 
-        async function sendToBackend(message) {
-            try {
-                const response = await fetch('/chat', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({ message: message }),
-                });
+  <!-- Popup for style selection -->
+  <div id="stylePopup" class="popup-container">
+    <div class="popup-content">
+      <h3>Diamond Style Preference</h3>
+      <p>Choose your diamond type:</p>
+      <div class="style-buttons">
+        <button class="style-button labgrown" onclick="selectStyle('labgrown')">
+          <i class="fas fa-flask"></i> Lab Grown
+        </button>
+        <button class="style-button natural" onclick="selectStyle('natural')">
+          <i class="fas fa-gem"></i> Natural
+        </button>
+      </div>
+      <p class="popup-info">
+        Lab-grown: Eco-friendly &amp; budget-friendly<br />
+        Natural: Timeless and classic
+      </p>
+    </div>
+  </div>
 
-                const data = await response.json();
-                addMessage(data.response);
-            } catch (error) {
-                console.error('Error:', error);
-                addMessage('Sorry, I encountered an error. Please try again.');
-            }
-        }
+  <!-- Modal for Diamond Details -->
+  <div id="detailsModal" class="modal">
+    <div class="modal-content">
+      <span class="close-button" onclick="closeModal()">&times;</span>
+      <div id="modalDetails"></div>
+    </div>
+  </div>
 
-        document.getElementById('userInput').addEventListener('keypress', function(e) {
-            if (e.key === 'Enter') {
-                sendMessage();
-            }
-        });
-    </script>
+  <!-- Main JS -->
+  <script src="../static/script.js"></script>
 </body>
 </html>
