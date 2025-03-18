@@ -18,6 +18,7 @@ def data_and_embedding(file_path, embedding_file, faiss_index_file, dataframe_fi
     df = df.apply(lambda x: x.astype(str).str.lower())
 
     print(f"Number of rows in dataset: {df.shape[0]}")
+    print(f"Column names in dataset: {df.columns.tolist()}")  # Print column names
 
     # Create a combined text field that includes Style
     df['combined_text'] = (
@@ -60,6 +61,7 @@ def data_and_embedding(file_path, embedding_file, faiss_index_file, dataframe_fi
 # ------------------- Load Data & FAISS Index -------------------
 def load_data_and_index(embedding_file, faiss_index_file, dataframe_file, model_path):
     df = pd.read_csv(dataframe_file)
+    print(f"Column names in loaded dataset: {df.columns.tolist()}")  # Print column names
     df["Carat"] = pd.to_numeric(df["Carat"], errors="coerce")
     embeddings = np.load(embedding_file)
     index = faiss.read_index(faiss_index_file)
@@ -70,21 +72,34 @@ def load_data_and_index(embedding_file, faiss_index_file, dataframe_file, model_
 # ------------------- Utility: Extract Constraints from Query -------------------
 def extract_constraints_from_query(user_query):
     """
-    Extracts constraints (Carat, Color, Clarity, Cut, Symmetry, Polish, Style, Shape)
+    Extracts constraints (Carat, Color, Clarity, Cut, Symmetry, Polish, Style, Shape, Budget)
     from the user's query. Non-numeric values are normalized to lowercase.
     Returns a dictionary.
     """
     constraints = {}
+
+    # Extract style (e.g., "lab grown", "lab", or "natural")
+    style_match = re.search(r'\b(lab\s*grown|lab|natural)\b', user_query, re.IGNORECASE)
+    if style_match:
+        style = style_match.group(1).lower()
+        # Normalize "lab" or "lab grown" to "labgrown"
+        if "lab" in style:
+            constraints["Style"] = "labgrown"
+        else:
+            constraints["Style"] = "natural"
 
     # Extract Carat (e.g., "0.8 carat")
     carat_match = re.search(r'(\d+(\.\d+)?)\s*-?\s*carat', user_query, re.IGNORECASE)
     if carat_match:
         constraints["Carat"] = float(carat_match.group(1))
 
-    # Extract "under price 2000" or "under 2000"
-    budget_match = re.search(r'under(?:\s*price)?\s*(\d+)', user_query, re.IGNORECASE)
+    # Extract Budget: try two patterns to handle both "price 2000$" and "2000$ price"
+    pattern1 = r'\b(?:under|at price|price)\s*\$?(\d+(?:,\d+)?)(?:\$)?\b'
+    pattern2 = r'\$?(\d+(?:,\d+)?)(?:\$)?\s*price\b'
+    budget_match = re.search(pattern1, user_query, re.IGNORECASE) or re.search(pattern2, user_query, re.IGNORECASE)
     if budget_match:
-        constraints["Budget"] = float(budget_match.group(1))
+        budget_str = budget_match.group(1).replace(',', '')
+        constraints["Budget"] = float(budget_str)
 
     # Extract Color (e.g., "E", "G") – normalized to lowercase
     color_match = re.search(r'\b([a-j])\b', user_query, re.IGNORECASE)
@@ -114,15 +129,18 @@ def extract_constraints_from_query(user_query):
         quality = symmetry_match.group(1) if symmetry_match.group(1) is not None else symmetry_match.group(2)
         constraints["Symmetry"] = quality.lower()
 
-    # Extract Style (e.g., "labgrown" or "natural") – normalized to lowercase
-    style_match = re.search(r'\b(lab grown|natural)\b', user_query, re.IGNORECASE)
-    if style_match:
-        constraints["Style"] = style_match.group(1).lower()
-
-    # Extract Shape (e.g., "round", "princess", "emerald", etc.) – normalized to lowercase
+    # Extract Shape (e.g., "round", "princess", etc.) – normalized to lowercase
     shape_match = re.search(r'\b(round|princess|emerald|asscher|cushion|marquise|radiant|oval|pear|heart|square radiant)\b', user_query, re.IGNORECASE)
     if shape_match:
         constraints["Shape"] = shape_match.group(1).lower()
+
+    # Optional: Extract price ordering preferences if no explicit budget is provided
+    lower_query = user_query.lower()
+    if "Budget" not in constraints:
+        if any(keyword in lower_query for keyword in ["cheapest", "lowest price", "affordable", "low budget"]):
+            constraints["PriceOrder"] = "asc"
+        elif any(keyword in lower_query for keyword in ["most expensive", "highest price", "priciest", "expensive", "high budget"]):
+            constraints["PriceOrder"] = "desc"
 
     return constraints
 
@@ -130,40 +148,36 @@ def extract_constraints_from_query(user_query):
 def hybrid_search(user_query, df, faiss_index, model, top_k=200):
     """
     1. Extract constraints from the query.
-    2. If Style is specified, restrict the DataFrame to that style.
-    3. If Carat is specified, pre-filter for near-exact matches using a narrow tolerance.
-    4. Perform FAISS search on the (possibly pre-filtered) dataset.
-    5. Compute a composite score that prioritizes:
-        - Exact Carat match (highest weight)
-        - Then Price (lower is better)
-        - Then mismatches in Clarity and Color (penalties)
-        - Then mismatches in Cut, Symmetry, and Polish (lower penalty)
-    6. Return the top 5 results.
+    2. Filter the DataFrame based on style, shape, clarity, budget, and quality attributes.
+    3. If Carat is specified, pre-filter for near-exact matches using a tolerance and perform a FAISS search.
+    4. Compute a composite score (if needed) and return the top 5 results.
     """
     constraints = extract_constraints_from_query(user_query)
 
     # Restrict by Style if specified
     if "Style" in constraints:
-        df = df[df['Style'] == constraints["Style"]]
+        style_val = constraints["Style"].lower()
+        df = df[df['Style'].str.lower().str.contains(style_val)]
         if df.empty:
             print("No diamonds found for the specified style.")
             return pd.DataFrame()
         
+    # Restrict by Shape if specified
     if "Shape" in constraints:
-        # Use contains() to allow for partial matches (e.g., "princess" matching "princess cut")
         df = df[df["Shape"].str.lower().str.contains(constraints["Shape"].lower())]
         if df.empty:
             print(f"No {constraints['Shape']} diamonds found.")
             return pd.DataFrame()
         
-    #Filter by Clarity if specified
+    # Filter by Clarity if specified (exact match)
     if "Clarity" in constraints:
-        df = df[df["Clarity"].str.lower().str.contains(constraints["Clarity"].lower())]
+        clarity_regex = rf'^{re.escape(constraints["Clarity"].lower())}$'
+        df = df[df["Clarity"].str.lower().str.match(clarity_regex)]
         if df.empty:
             print(f"No diamonds found with clarity {constraints['Clarity']}.")
             return pd.DataFrame()
 
-    # If Budget is specified, filter diamonds above that budget
+    # If Budget is specified, filter for diamonds under that price
     if "Budget" in constraints:
         user_budget = constraints["Budget"]
         df = df[df["Price"] <= user_budget]
@@ -181,16 +195,17 @@ def hybrid_search(user_query, df, faiss_index, model, top_k=200):
             print(f"No diamonds found that exactly match the specified {', '.join(specified_quality)} criteria.")
             return pd.DataFrame()
 
+    # If Carat is not specified, use fallback sorting:
     if "Carat" not in constraints:
-        if any(word in user_query.lower() for word in ["minimum", "lowest", "smallest"]):
-            # Sort by Carat in ascending order to return the smallest (minimum) carat diamonds
+        if "PriceOrder" in constraints and constraints["PriceOrder"] == "asc":
+            results_df = df.sort_values(by="Price", ascending=True)
+        elif any(word in user_query.lower() for word in ["minimum", "lowest", "smallest"]):
             results_df = df.sort_values(by="Carat", ascending=True)
         else:
-            # Otherwise, default to sorting by Price descending
             results_df = df.sort_values(by="Price", ascending=False)
         return results_df.head(5).reset_index(drop=True)
 
-    # Set initial tolerance: 0.01 for labgrown, 0.05 for natural diamonds
+    # If Carat is specified, set tolerance based on style
     tolerance = 0.01 if constraints.get("Style", "").lower() == "labgrown" else 0.05
     df_carat = df[
         (df['Carat'] >= constraints["Carat"] - tolerance) &
@@ -224,28 +239,31 @@ def hybrid_search(user_query, df, faiss_index, model, top_k=200):
         results_df = df.iloc[valid_indices].copy()
         results_df['distance'] = valid_D
 
-    # Additional sorting if query mentions "highest", "largest", or "maximum"
+    # Global Price Ordering Block: Check for explicit price keywords or extracted PriceOrder.
+    if any(word in user_query.lower() for word in ["cheapest", "lowest price", "affordable", "low budget"]) or ("PriceOrder" in constraints and constraints["PriceOrder"] == "asc"):
+        results_df = results_df.sort_values(by='Price', ascending=True)
+        return results_df.head(5).reset_index(drop=True)
+    elif any(word in user_query.lower() for word in ["most expensive", "highest price", "priciest", "expensive", "high budget"]) or ("PriceOrder" in constraints and constraints["PriceOrder"] == "desc"):
+        results_df = results_df.sort_values(by='Price', ascending=False)
+        return results_df.head(5).reset_index(drop=True)
+
+    # Additional sorting for Carat if query mentions "highest", "largest", "maximum"
     if any(word in user_query.lower() for word in ["highest", "largest", "maximum"]):
         results_df = results_df.sort_values(by='Carat', ascending=False)
         return results_df.head(5).reset_index(drop=True)
-    # NEW: If query mentions "minimum", "lowest", or "smallest", sort by Carat ascending
+    # Or if query mentions "minimum", "lowest", "smallest"
     elif any(word in user_query.lower() for word in ["minimum", "lowest", "smallest"]):
         results_df = results_df.sort_values(by='Carat', ascending=True)
         return results_df.head(5).reset_index(drop=True)
     else:
-        # Otherwise, use composite ranking (if not using strict filtering)
+        # Composite ranking if no explicit ordering keywords are detected
         def compute_score(row, constraints, df_filtered):
             score = row['distance']
-            
-            # Only add a direct carat penalty if user specifies Carat;
-            # Otherwise, anchor against the median carat to avoid outlier bias.
             if "Carat" in constraints:
                 score += 1000 * abs(row["Carat"] - constraints["Carat"])
             else:
                 median_carat = df_filtered['Carat'].median()
                 score += 100 * abs(row["Carat"] - median_carat)
-            
-            # Price penalty: favor diamonds whose price is close to the user's budget (if provided)
             if "Budget" in constraints:
                 user_budget = constraints["Budget"]
                 score += 0.05 * abs(row["Price"] - user_budget)
@@ -255,15 +273,12 @@ def hybrid_search(user_query, df, faiss_index, model, top_k=200):
                 except:
                     price = 0
                 score += 0.1 * price
-
-            # Penalties for mismatch in quality attributes
             for attr, penalty in [("Clarity", 50), ("Color", 50)]:
                 if attr in constraints and row[attr].lower() != constraints[attr].lower():
                     score += penalty
             for attr, penalty in [("Cut", 20), ("Symmetry", 20), ("Polish", 20)]:
                 if attr in constraints and row[attr].lower() != constraints[attr].lower():
                     score += penalty
-            
             return score
 
         results_df['score'] = results_df.apply(lambda row: compute_score(row, constraints, df), axis=1)
@@ -272,45 +287,43 @@ def hybrid_search(user_query, df, faiss_index, model, top_k=200):
 
 # ------------------- Groq Integration -------------------
 def generate_groq_response(user_query, relevant_data, client):
-    """
-    Use FAISS retrieval to enhance the prompt before sending it to Groq.
-    Sends a prompt to Groq's LLM to generate a shop assistant–style response using the provided diamond details.
-    """
-    prompt = f"""You are a friendly and knowledgeable shop assistant at a diamond store.
-    If the user says hi or hello then respond accordingly introducing yourself.
+    prompt = f"""
+You are a friendly and knowledgeable shop assistant at a diamond store.
 Your goal is to help the customer find diamonds that best match their query.
-Speak in a warm, engaging, and professional tone, and use only the provided diamond details.
-Include all of the following details for each diamond option: Style, Carat, Price, Clarity, Color, Cut, Shape, Lab, Polish, and Symmetry.
 
-User Query: {user_query}
+First, write a brief introduction responding to the user's query, explaining what you found.
+Then, return a structured JSON array of the top diamonds that match their criteria.
 
-Here are some diamond details that might be relevant:
+Here's the specific format to use:
+1. A brief introduction paragraph, one or two sentences.
+2. A special marker <diamond-data> followed by a valid JSON array of diamond objects.
+3. Close with </diamond-data>
+
+Example format:
+"I found several diamonds matching your criteria. Here are the best options:
+<diamond-data>
+[
+  {{
+    "Carat": 1.01,
+    "Clarity": "VS1",
+    "Color": "F",
+    "Cut": "Excellent",
+    "Shape": "Round",
+    "Price": "5000",
+    "Style": "Natural",
+    "Polish": "Excellent",
+    "Symmetry": "Excellent"
+  }},
+  ...more diamonds...
+]
+</diamond-data>"
+
+Below are some diamond details that might be relevant:
 {relevant_data}
 
-Please provide a detailed, numbered recommendation (1 to 5) for the customer. 
-In particular, if the diamond prices are significantly below the customer's specified budget, prioritize recommending the higher-priced options within the budget as these typically represent diamonds with enhanced quality and value. 
-For each diamond option, include a full explanation of its attributes and why it might be a good choice. For example:
-1. A 0.33 carat diamond with VS1 clarity, F color, excellent cut, and round shape, priced at $614.0. This diamond has an excellent polish and symmetry, and it's certified by the Gemological Institute of America (GIA).
-2. Although slightly smaller, we also have a 0.32 carat diamond with VS1 clarity, F color, excellent cut, and round shape, priced at $488.0. This diamond also has an excellent polish and symmetry, and it's certified by the GIA.
-Make sure your response is complete and includes a separate, detailed explanation for each diamond option on a separate line.
-
-Please assist the customer by providing the diamond details (carat, clarity, color, cut, shape, price, and style) along with some helpful suggestions.
-Tell them what diamond would be a better choice and why.
-Now, generate a helpful and informative response while maintaining a professional, formal tone.
-Please only use the above information to generate your response. If no relevant diamonds are found, politely inform the user.
-
-Example Conversations:
-Q: I need a 0.5-carat diamond with a G color.
-A: We have multiple 0.5-carat diamonds in G color with different clarity grades. For example, one with VS1 clarity is priced at $2,500.
-
-Q: What's the best cut for a solitaire ring?
-A: The best cut for a solitaire ring is an Ideal or Excellent cut, as it maximizes brilliance.
-
-Now, based on our diamond inventory, here are the most relevant options:
-{relevant_data}
-
-
-Answer:"""
+Parse this data and create a proper JSON response as described above.
+Ensure the JSON is valid and can be parsed by JavaScript's JSON.parse() function.
+"""
     chat_completion = client.chat.completions.create(
         messages=[{"role": "system", "content": prompt}],
         model="llama-3.3-70b-versatile",
@@ -321,32 +334,40 @@ Answer:"""
 
 # ------------------- Main Chatbot Logic -------------------
 def diamond_chatbot(user_query, df, faiss_index, model, client):
-    # 1. Quick check for "hi" or "hello"
+    """
+    Handles the chatbot's logic and returns the chatbot's response as a string.
+    """
+    # Handle greetings
     if user_query.strip().lower() in ["hi", "hello"]:
-        print("Hello! I'm your diamond assistant. How can I help you find the perfect diamond today?")
-        return
-    
-    # 2. Extract constraints from the user query
+        return "Hey there! I'm your diamond guru 😎. Ready to help you find that perfect sparkle? Tell me what you're looking for!"
+
+    # Extract constraints from the user query
     constraints = extract_constraints_from_query(user_query)
+    
+    # Only fall back if there are no constraints AND no ordering keywords in the query.
+    if not constraints and not any(keyword in user_query.lower() for keyword in ["maximum", "minimum", "lowest", "highest", "largest", "smallest"]):
+        return "Hello! I'm your diamond assistant. Please let me know your preferred carat, clarity, color, cut, or budget so I can help you find the perfect diamond."
 
-    # 3. If constraints are empty, handle that gracefully
-    if not constraints:
-        print("Hello! I'm your diamond assistant. Please let me know your preferred carat, clarity, color, " 
-            "cut, or budget so I can help you find the perfect diamond.")
-        return
-
-    # 4. Otherwise, proceed with your existing logic
+    # Proceed with searching for diamonds
     results_df = hybrid_search(user_query, df, faiss_index, model, top_k=200)
     if results_df.empty:
-        print("No matching diamonds found. Please try a different query.")
-        return
+        return "No matching diamonds found. Please try a different query."
 
+    # Select top 5 matching diamonds
     top_5 = results_df.head(5)
     relevant_data = "\n".join(top_5['combined_text'].tolist())
+
+    # Generate response using Groq AI
     groq_response = generate_groq_response(user_query, relevant_data, client)
 
-    print(groq_response)
-    
+    return groq_response
+
+
+
+def convert_markdown_to_html(text):
+    # Replace markdown bold (text) with HTML <strong>text</strong>
+    return re.sub(r'\*\*(.*?)\*\*', r'<strong>\1</strong>', text)
+
 # ------------------- Main Execution -------------------
 def main():
     load_dotenv()
@@ -365,24 +386,29 @@ def main():
         print("Error loading existing data:", e)
         print("Running first-time data load and creating index...")
         df, embeddings, index, model = data_and_embedding(file_path, embedding_file, faiss_index_file, dataframe_file, model_path)
-    # Conversation loop: Continue until user types "exit" or "quit"
+    
+    # Conversation loop
     while True:
         user_query = input("Hi! How can I help you? : ")
         if user_query.lower() in ["exit", "quit"]:
             print("Thank you for visiting! Have a wonderful day.")
             break
-        # If user said "hi" or "hello", let's just pass it directly to diamond_chatbot()
-        # The fallback inside diamond_chatbot() will handle it.
+        
+        # Process greetings
         if user_query.strip().lower() in ["hi", "hello"]:
-            diamond_chatbot(user_query, df, index, model, client)
+            response = diamond_chatbot(user_query, df, index, model, client)
+            print(response)
             print("\n---\n")
             continue
+
         constraints = extract_constraints_from_query(user_query)
         if "Style" not in constraints:
             style_input = input("Please specify the style (LabGrown or Natural): ")
             user_query += " " + style_input
-        diamond_chatbot(user_query, df, index, model, client)
+        
+        response = diamond_chatbot(user_query, df, index, model, client)
+        print(response)
         print("\n---\n")
     
-if _name_ == "__main__":
+if __name__ == "__main__":
     main()
